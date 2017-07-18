@@ -137,7 +137,9 @@ public class AmqpSaslAuthenticator {
                 byte[] challenge = new byte[sasl.pending()];
                 sasl.recv(challenge, 0, challenge.length);
                 byte[] response = mechanism.getChallengeResponse(challenge);
-                sasl.send(response, 0, response.length);
+                if (response != null) {
+                    sasl.send(response, 0, response.length);
+                }
             }
         } catch (SaslException se) {
             JMSSecurityException jmsse = new JMSSecurityException("Exception while processing SASL step: " + se.getMessage());

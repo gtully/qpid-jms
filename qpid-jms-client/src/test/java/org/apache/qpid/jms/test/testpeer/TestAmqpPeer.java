@@ -21,6 +21,7 @@ package org.apache.qpid.jms.test.testpeer;
 import static org.apache.qpid.jms.provider.amqp.AmqpSupport.DYNAMIC_NODE_LIFETIME_POLICY;
 import static org.apache.qpid.jms.provider.amqp.AmqpSupport.GLOBAL;
 import static org.apache.qpid.jms.provider.amqp.AmqpSupport.SHARED;
+import static org.apache.qpid.jms.sasl.GssKrb5Mechanism.kerb5InlineConfig;
 import static org.hamcrest.MatcherAssert.assertThat;
 import static org.hamcrest.Matchers.arrayContaining;
 import static org.hamcrest.Matchers.equalTo;
@@ -32,6 +33,8 @@ import static org.hamcrest.Matchers.nullValue;
 
 import java.io.IOException;
 import java.net.Socket;
+import java.security.PrivilegedActionException;
+import java.security.PrivilegedExceptionAction;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
@@ -40,6 +43,8 @@ import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 
 import javax.net.ssl.SSLContext;
+import javax.security.auth.Subject;
+import javax.security.auth.login.LoginContext;
 
 import org.apache.qpid.jms.provider.amqp.AmqpSupport;
 import org.apache.qpid.jms.provider.amqp.message.AmqpDestinationHelper;
@@ -65,6 +70,7 @@ import org.apache.qpid.jms.test.testpeer.describedtypes.FlowFrame;
 import org.apache.qpid.jms.test.testpeer.describedtypes.FrameDescriptorMapping;
 import org.apache.qpid.jms.test.testpeer.describedtypes.OpenFrame;
 import org.apache.qpid.jms.test.testpeer.describedtypes.Released;
+import org.apache.qpid.jms.test.testpeer.describedtypes.SaslChallengeFrame;
 import org.apache.qpid.jms.test.testpeer.describedtypes.SaslMechanismsFrame;
 import org.apache.qpid.jms.test.testpeer.describedtypes.SaslOutcomeFrame;
 import org.apache.qpid.jms.test.testpeer.describedtypes.Source;
@@ -99,8 +105,14 @@ import org.apache.qpid.proton.amqp.UnsignedInteger;
 import org.apache.qpid.proton.amqp.UnsignedShort;
 import org.apache.qpid.proton.codec.Data;
 import org.apache.qpid.proton.engine.impl.AmqpHeader;
+import org.hamcrest.BaseMatcher;
+import org.hamcrest.Description;
 import org.hamcrest.Matcher;
 import org.hamcrest.Matchers;
+import org.ietf.jgss.GSSContext;
+import org.ietf.jgss.GSSCredential;
+import org.ietf.jgss.GSSException;
+import org.ietf.jgss.GSSManager;
 import org.junit.Assert;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -493,6 +505,98 @@ public class TestAmqpPeer implements AutoCloseable
         {
             addHandler(new HeaderHandlerImpl(AmqpHeader.HEADER, AmqpHeader.HEADER));
         }
+    }
+
+    public void expectGSSAPI(Symbol mech) throws Exception {
+
+        SaslMechanismsFrame saslMechanismsFrame = new SaslMechanismsFrame().setSaslServerMechanisms(mech);
+
+        addHandler(new HeaderHandlerImpl(AmqpHeader.SASL_HEADER, AmqpHeader.SASL_HEADER,
+                new FrameSender(
+                        this, FrameType.SASL, 0,
+                        saslMechanismsFrame, null)));
+
+        // setup server gss context
+        LoginContext loginContext = new LoginContext("", null, null,
+                kerb5InlineConfig("host/localhost", false));
+        loginContext.login();
+        final Subject serverSubject = loginContext.getSubject();
+        final GSSManager manager = GSSManager.getInstance();
+        final GSSContext context = Subject.doAs(serverSubject, new PrivilegedExceptionAction<GSSContext>() {
+            @Override
+            public GSSContext run() throws Exception {
+                return manager.createContext((GSSCredential) null); // pull from subject
+            }
+        });
+        LOGGER.info("GSSContext subject:" + serverSubject);
+
+        final SaslChallengeFrame challengeFrame = new SaslChallengeFrame();
+
+        SaslInitMatcher saslInitMatcher = new SaslInitMatcher()
+                .withMechanism(equalTo(mech))
+                .withInitialResponse(new BaseMatcher<Binary>() {
+
+                    @Override
+                    public void describeTo(Description description) {}
+
+                    @Override
+                    public boolean matches(Object o) {
+                        final Binary binary = (Binary) o;
+                        if (!context.isEstablished()) {
+                            // validate with gss
+                            byte[] token = null;
+                            try {
+                                token = Subject.doAs(serverSubject, new PrivilegedExceptionAction<byte[]>() {
+                                    @Override
+                                    public byte[] run() throws Exception {
+                                        return context.acceptSecContext(binary.getArray(), 0, binary.getArray().length);
+                                    }
+                                });
+                            } catch (PrivilegedActionException e) {
+                                e.printStackTrace();
+                            }
+                            if (context.isEstablished()) {
+                                try {
+                                    LOGGER.info("Context established for :" + context.getSrcName());
+                                    if (context.getMutualAuthState()) {
+                                        LOGGER.info("Mutual authentication took place!");
+                                    }
+                                } catch (GSSException e) {
+                                    e.printStackTrace();
+                                }
+                            }
+                            // fling it back
+                            challengeFrame.setChallenge(new Binary(token));
+                            return true;
+                        }
+
+                        return false;
+                    }
+                })
+                .onCompletion(new AmqpPeerRunnable() {
+                    @Override
+                    public void run() {
+                        TestAmqpPeer.this.sendFrame(
+                                FrameType.SASL, 0,
+                                challengeFrame,
+                                null,
+                                false, 0);
+
+                        TestAmqpPeer.this.sendFrame(
+                                FrameType.SASL, 0,
+                                new SaslOutcomeFrame().setCode(context.isEstablished() ? SASL_OK : SASL_FAIL_AUTH),
+                                null,
+                                false, 0);
+
+
+                        // Now that we processed the SASL layer AMQP header, reset the
+                        // peer to expect the non-SASL AMQP header.
+                        _driverRunnable.expectHeader();
+                    }
+                });
+
+        addHandler(saslInitMatcher);
+        addHandler(new HeaderHandlerImpl(AmqpHeader.HEADER, AmqpHeader.HEADER));
     }
 
     public void expectSaslPlain(String username, String password)
