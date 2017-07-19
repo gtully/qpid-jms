@@ -116,11 +116,4 @@ public interface Mechanism extends Comparable<Mechanism> {
 
     boolean isApplicable(String username, String password, Principal localPrincipal);
 
-    /**
-     *  sets the host name from sasl for SaslInit
-     * @param hostname
-     */
-    void setHostname(String hostname);
-
-
 }

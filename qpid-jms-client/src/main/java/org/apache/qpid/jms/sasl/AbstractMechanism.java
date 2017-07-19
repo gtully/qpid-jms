@@ -40,9 +40,6 @@ public abstract class AbstractMechanism implements Mechanism {
     }
 
     @Override
-    public void setHostname(String hostname) {};
-
-    @Override
     public void setUsername(String value) {
         this.username = value;
     }

@@ -20,6 +20,8 @@
  */
 package org.apache.qpid.jms.integration;
 
+import org.apache.directory.server.kerberos.shared.keytab.Keytab;
+import org.apache.directory.server.kerberos.shared.keytab.KeytabEntry;
 import org.apache.hadoop.minikdc.MiniKdc;
 import org.apache.qpid.jms.JmsConnectionFactory;
 import org.apache.qpid.jms.test.QpidJmsTestCase;
@@ -28,6 +30,8 @@ import org.apache.qpid.proton.amqp.Symbol;
 import org.junit.After;
 import org.junit.Before;
 import org.junit.Test;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import javax.jms.Connection;
 import javax.jms.ConnectionFactory;
@@ -39,7 +43,10 @@ import static org.junit.Assert.assertNull;
 
 public class SaslGssApiIntegrationTest extends QpidJmsTestCase {
 
+    private static final Logger LOG = LoggerFactory.getLogger(SaslGssApiIntegrationTest.class);
+
     private static final Symbol GSSKRB5 = Symbol.valueOf("GSSAPI");
+    private static final String serviceName = "amqp/localhost";
 
     private MiniKdc kdc;
 
@@ -53,7 +60,19 @@ public class SaslGssApiIntegrationTest extends QpidJmsTestCase {
 
         // hard coded match, default_keytab_name in minikdc-krb5.conf template
         File userKeyTab = new File("target/test.krb5.keytab");
-        kdc.createPrincipal(userKeyTab, "client", "host/localhost");
+        kdc.createPrincipal(userKeyTab, "client", serviceName);
+
+        Keytab kt = Keytab.read(userKeyTab);
+        for (KeytabEntry entry : kt.getEntries()) {
+            LOG.info("KeyTab Kerb PrincipalNames:" + entry.getPrincipalName());
+        }
+        /*
+        java.util.logging.Logger logger = java.util.logging.Logger.getLogger("javax.security.sasl");
+        logger.setLevel(Level.FINEST);
+        logger.addHandler(new ConsoleHandler());
+        for (Handler handler: logger.getHandlers()) {
+            handler.setLevel(Level.FINEST);
+        }*/
     }
 
     @After
@@ -67,7 +86,7 @@ public class SaslGssApiIntegrationTest extends QpidJmsTestCase {
     public void testSaslGssApiKrbConnection() throws Exception {
         try (TestAmqpPeer testPeer = new TestAmqpPeer();) {
 
-            testPeer.expectGSSAPI(GSSKRB5);
+            testPeer.expectGSSAPI(GSSKRB5, serviceName);
             testPeer.expectOpen();
 
             // Each connection creates a session for managing temporary destinations etc

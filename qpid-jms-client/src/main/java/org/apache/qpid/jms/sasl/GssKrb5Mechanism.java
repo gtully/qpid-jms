@@ -16,42 +16,45 @@
  */
 package org.apache.qpid.jms.sasl;
 
-import org.ietf.jgss.GSSContext;
-import org.ietf.jgss.GSSManager;
-import org.ietf.jgss.GSSName;
-import org.ietf.jgss.Oid;
-
-import java.io.UnsupportedEncodingException;
-import java.security.InvalidKeyException;
-import java.security.NoSuchAlgorithmException;
+import javax.security.auth.Subject;
+import javax.security.auth.login.AppConfigurationEntry;
+import javax.security.auth.login.Configuration;
+import javax.security.auth.login.LoginContext;
+import javax.security.sasl.Sasl;
+import javax.security.sasl.SaslClient;
+import javax.security.sasl.SaslException;
 import java.security.Principal;
 import java.security.PrivilegedActionException;
 import java.security.PrivilegedExceptionAction;
 import java.util.HashMap;
 import java.util.Map;
 
-import javax.crypto.Mac;
-import javax.crypto.spec.SecretKeySpec;
-import javax.security.auth.Subject;
-import javax.security.auth.login.AppConfigurationEntry;
-import javax.security.auth.login.Configuration;
-import javax.security.auth.login.LoginContext;
-import javax.security.sasl.SaslException;
-
 /**
- * Implements the GSSAPI-KERBEROS authentication Mechanism.
+ * Implements the GSSAPI sasl authentication Mechanism.
  */
 public class GssKrb5Mechanism extends AbstractMechanism {
 
     private Subject subject;
-    private GSSContext context;
-    private String hostHame;
-    byte[] token = new byte[0];
-    private static Oid krb5Oid;
-    static {
-        try {
-            krb5Oid = new Oid("1.2.840.113554.1.2.2");
-        } catch (Exception igored) {}
+    private SaslClient saslClient;
+    private String protocol = "amqp";
+    private String serviceName = "localhost";
+
+    // a gss/sasl service name, x@y, morphs to a krbPrincipal a/y@REALM
+
+    public String getProtocol() {
+        return protocol;
+    }
+
+    public void setProtocol(String protocol) {
+        this.protocol = protocol;
+    }
+
+    public String getServiceName() {
+        return serviceName;
+    }
+
+    public void setServiceName(String serviceName) {
+        this.serviceName = serviceName;
     }
 
     @Override
@@ -67,25 +70,20 @@ public class GssKrb5Mechanism extends AbstractMechanism {
     @Override
     public byte[] getInitialResponse() throws SaslException {
         try {
-            final GSSManager manager = GSSManager.getInstance();
-            final GSSName serverName = manager.createName("host/" + hostHame, null);
-            context = manager.createContext(serverName, krb5Oid, null,
-                    GSSContext.DEFAULT_LIFETIME);
-            context.requestMutualAuth(true); // Request mutual authentication
+            return Subject.doAs(subject, new PrivilegedExceptionAction<byte[]>() {
 
-            token =
-                    Subject.doAs(subject, new PrivilegedExceptionAction<byte[]>() {
-
-                        @Override
-                        public byte[] run() throws Exception {
-                            return context.initSecContext(token, 0, token.length);
-                        }
-                    });
-
+                @Override
+                public byte[] run() throws Exception {
+                    saslClient = Sasl.createSaslClient(new String[]{getName()}, null, protocol, serviceName, null, null);
+                    if (saslClient.hasInitialResponse()) {
+                        return saslClient.evaluateChallenge(new byte[0]);
+                    }
+                    return null;
+                }
+            });
         } catch (Exception e) {
             throw new SaslException(e.toString(), e);
         }
-        return  token;
     }
 
     @Override
@@ -94,7 +92,7 @@ public class GssKrb5Mechanism extends AbstractMechanism {
             return Subject.doAs(subject, new PrivilegedExceptionAction<byte[]>() {
                 @Override
                 public byte[] run() throws Exception {
-                    return context.initSecContext(challenge, 0, challenge.length);
+                    return saslClient.evaluateChallenge(challenge);
                 }
             });
         } catch (PrivilegedActionException e) {
@@ -105,7 +103,6 @@ public class GssKrb5Mechanism extends AbstractMechanism {
     @Override
     public boolean isApplicable(String kerb5Config, String password, Principal localPrincipal) {
         if (kerb5Config != null && kerb5Config.length() > 0 && password == null) {
-
             try {
                 LoginContext loginContext = null;
                 if (Character.isUpperCase(kerb5Config.charAt(0))) {
@@ -125,11 +122,6 @@ public class GssKrb5Mechanism extends AbstractMechanism {
             }
         }
         return subject != null;
-    }
-
-    @Override
-    public void setHostname (String hostName) {
-        this.hostHame = hostName;
     }
 
     public static Configuration kerb5InlineConfig(String principal, boolean initiator) {
