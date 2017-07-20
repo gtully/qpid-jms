@@ -36,6 +36,7 @@ public class AmqpSaslAuthenticator {
 
     private Mechanism mechanism;
     private boolean complete;
+    private boolean exceptionResult;
 
     /**
      * Create the authenticator and initialize it.
@@ -80,6 +81,7 @@ public class AmqpSaslAuthenticator {
             }
         } catch (JMSSecurityException result) {
             authenticationRequest.onFailure(result);
+            exceptionResult = true;
         }
 
         complete = authenticationRequest.isComplete();
@@ -92,6 +94,9 @@ public class AmqpSaslAuthenticator {
     }
 
     public boolean wasSuccessful() throws IllegalStateException {
+        if (exceptionResult) {
+            return false;
+        }
         switch (sasl.getState()) {
             case PN_SASL_CONF:
             case PN_SASL_IDLE:

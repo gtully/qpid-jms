@@ -45,7 +45,7 @@ public class SaslGssApiIntegrationTest extends QpidJmsTestCase {
 
     private static final Logger LOG = LoggerFactory.getLogger(SaslGssApiIntegrationTest.class);
 
-    private static final Symbol GSSKRB5 = Symbol.valueOf("GSSAPI");
+    private static final Symbol GSSAPI = Symbol.valueOf("GSSAPI");
     private static final String serviceName = "amqp/localhost";
 
     private MiniKdc kdc;
@@ -66,13 +66,13 @@ public class SaslGssApiIntegrationTest extends QpidJmsTestCase {
         for (KeytabEntry entry : kt.getEntries()) {
             LOG.info("KeyTab Kerb PrincipalNames:" + entry.getPrincipalName());
         }
-        /*
+
         java.util.logging.Logger logger = java.util.logging.Logger.getLogger("javax.security.sasl");
-        logger.setLevel(Level.FINEST);
-        logger.addHandler(new ConsoleHandler());
-        for (Handler handler: logger.getHandlers()) {
-            handler.setLevel(Level.FINEST);
-        }*/
+        logger.setLevel(java.util.logging.Level.FINEST);
+        logger.addHandler(new java.util.logging.ConsoleHandler());
+        for (java.util.logging.Handler handler: logger.getHandlers()) {
+            handler.setLevel(java.util.logging.Level.FINEST);
+        }
     }
 
     @After
@@ -86,15 +86,67 @@ public class SaslGssApiIntegrationTest extends QpidJmsTestCase {
     public void testSaslGssApiKrbConnection() throws Exception {
         try (TestAmqpPeer testPeer = new TestAmqpPeer();) {
 
-            testPeer.expectGSSAPI(GSSKRB5, serviceName);
+            testPeer.expectGSSAPI(GSSAPI, serviceName);
             testPeer.expectOpen();
 
             // Each connection creates a session for managing temporary destinations etc
             testPeer.expectBegin();
 
-            String uriOptions = "?amqp.saslLayer=true&amqp.saslMechanisms=" + GSSKRB5.toString();
+            String uriOptions = "?amqp.saslMechanisms=" + GSSAPI.toString();
             ConnectionFactory factory = new JmsConnectionFactory("amqp://localhost:" + testPeer.getServerPort() + uriOptions);
             Connection connection = factory.createConnection("client", null);
+            // Set a clientID to provoke the actual AMQP connection process to occur.
+            connection.setClientID("clientName");
+
+            testPeer.waitForAllHandlersToComplete(1000);
+            assertNull(testPeer.getThrowable());
+
+            testPeer.expectClose();
+            connection.close();
+        }
+    }
+
+    @Test(timeout = 20000)
+    public void testSaslGssApiKrbConnectionJmsUser() throws Exception {
+        try (TestAmqpPeer testPeer = new TestAmqpPeer();) {
+
+            testPeer.expectGSSAPI(GSSAPI, serviceName);
+            testPeer.expectOpen();
+
+            // Each connection creates a session for managing temporary destinations etc
+            testPeer.expectBegin();
+
+            String uriOptions = "?jms.username=client&amqp.saslMechanisms=" + GSSAPI.toString();
+            ConnectionFactory factory = new JmsConnectionFactory("amqp://localhost:" + testPeer.getServerPort() + uriOptions);
+            Connection connection = factory.createConnection();
+            // Set a clientID to provoke the actual AMQP connection process to occur.
+            connection.setClientID("clientName");
+
+            testPeer.waitForAllHandlersToComplete(1000);
+            assertNull(testPeer.getThrowable());
+
+            testPeer.expectClose();
+            connection.close();
+        }
+    }
+
+
+
+    @Test(timeout = 20000)
+    public void testSaslGssApiKrbConfigConnection() throws Exception {
+        setTestSystemProperty("java.security.auth.login.config",
+                SaslGssApiIntegrationTest.class.getClassLoader().getResource("login.config").getPath());
+        try (TestAmqpPeer testPeer = new TestAmqpPeer();) {
+
+            testPeer.expectGSSAPI(GSSAPI, serviceName);
+            testPeer.expectOpen();
+
+            // Each connection creates a session for managing temporary destinations etc
+            testPeer.expectBegin();
+
+            String uriOptions = "?sasl.configScope=KRB5-CLIENT&sasl.protocol=amqp&sasl.server=localhost&amqp.saslMechanisms=" + GSSAPI.toString();
+            ConnectionFactory factory = new JmsConnectionFactory("amqp://localhost:" + testPeer.getServerPort() + uriOptions);
+            Connection connection = factory.createConnection();
             // Set a clientID to provoke the actual AMQP connection process to occur.
             connection.setClientID("clientName");
 

@@ -21,7 +21,7 @@ package org.apache.qpid.jms.test.testpeer;
 import static org.apache.qpid.jms.provider.amqp.AmqpSupport.DYNAMIC_NODE_LIFETIME_POLICY;
 import static org.apache.qpid.jms.provider.amqp.AmqpSupport.GLOBAL;
 import static org.apache.qpid.jms.provider.amqp.AmqpSupport.SHARED;
-import static org.apache.qpid.jms.sasl.GssKrb5Mechanism.kerb5InlineConfig;
+import static org.apache.qpid.jms.sasl.GssapiMechanism.kerb5InlineConfig;
 import static org.hamcrest.MatcherAssert.assertThat;
 import static org.hamcrest.Matchers.arrayContaining;
 import static org.hamcrest.Matchers.equalTo;
@@ -560,6 +560,10 @@ public class TestAmqpPeer implements AutoCloseable
 
                     @Override
                     public boolean matches(Object o) {
+                        if (o == null) {
+                            LOGGER.error("Got null initial response!");
+                            return false;
+                        }
                         final Binary binary = (Binary) o;
                         // validate via sasl
                         byte[] token = null;
